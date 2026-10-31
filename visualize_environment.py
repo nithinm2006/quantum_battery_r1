@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 
 from env.battery_env import BatteryEnv
-
+from agents.rule_based_agent import RuleBasedAgent
 
 def demo_policy(price, soc_percent):
     """
@@ -20,6 +20,7 @@ def demo_policy(price, soc_percent):
 
 def main():
     env = BatteryEnv()
+    agent = RuleBasedAgent()
     observation, info = env.reset(seed=42)
 
     hours = []
@@ -43,7 +44,7 @@ def main():
         demand = float(observation[2] * 100.0)
         soc_percent = float(observation[0] * 100.0)
 
-        action = demo_policy(price, soc_percent)
+        action = agent.select_action(observation)
 
         # Execute the selected action
         observation, reward, terminated, truncated, info = env.step(action)
