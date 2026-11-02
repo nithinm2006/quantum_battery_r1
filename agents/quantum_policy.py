@@ -5,9 +5,9 @@ from qiskit.quantum_info import Statevector
 
 class QuantumPolicy:
     """
-    Parameterized quantum policy for the battery RL environment.
+    Parameterized quantum policy for BatteryEnv.
 
-    Observation features:
+    Observation:
         [normalized_soc, normalized_price, normalized_demand, normalized_hour]
 
     Actions:
@@ -16,11 +16,7 @@ class QuantumPolicy:
         2 = hold
     """
 
-    ACTIONS = {
-        0: "charge",
-        1: "discharge",
-        2: "hold",
-    }
+    ACTIONS = {0: "charge", 1: "discharge", 2: "hold"}
 
     def __init__(self, n_qubits=4, n_layers=2, seed=42):
         if n_qubits < 2:
@@ -31,12 +27,8 @@ class QuantumPolicy:
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.rng = np.random.default_rng(seed)
-
-        # Three trainable rotation angles per qubit per layer.
         self.weights = self.rng.uniform(
-            -np.pi,
-            np.pi,
-            size=(n_layers, n_qubits, 3)
+            -np.pi, np.pi, size=(n_layers, n_qubits, 3)
         )
 
     def _validate_observation(self, observation):
@@ -46,58 +38,46 @@ class QuantumPolicy:
             raise ValueError(
                 f"Expected observation shape (4,), got {observation.shape}"
             )
-
         if not np.all(np.isfinite(observation)):
             raise ValueError("Observation must contain finite values.")
 
-        # The environment provides normalized features.
         return np.clip(observation, 0.0, 1.0)
 
     def build_circuit(self, observation):
-        """Build the parameterized circuit for one battery observation."""
         observation = self._validate_observation(observation)
-
         circuit = QuantumCircuit(self.n_qubits)
 
-        # Encode the four observation features into the qubits.
+        # Encode state features.
         for qubit in range(self.n_qubits):
-            feature = observation[qubit % len(observation)]
+            feature = observation[qubit % 4]
             circuit.ry(np.pi * feature, qubit)
             circuit.rz(np.pi * feature, qubit)
 
-        # Trainable variational layers with ring entanglement.
+        # Trainable variational layers.
         for layer in range(self.n_layers):
             for qubit in range(self.n_qubits):
                 theta_y, theta_z, theta_x = self.weights[layer, qubit]
-
                 circuit.ry(theta_y, qubit)
                 circuit.rz(theta_z, qubit)
                 circuit.rx(theta_x, qubit)
 
             for qubit in range(self.n_qubits - 1):
                 circuit.cx(qubit, qubit + 1)
-
-            # Close the entanglement ring.
             circuit.cx(self.n_qubits - 1, 0)
 
         return circuit
 
     def action_probabilities(self, observation):
-        """
-        Return probabilities in action order:
-        [charge, discharge, hold].
-        """
         circuit = self.build_circuit(observation)
         state = Statevector.from_instruction(circuit)
         basis_probabilities = state.probabilities()
 
         action_probs = np.zeros(3, dtype=float)
 
-        # Use the first two qubits as the action register.
+        # Map the two least-significant qubits to three actions:
         # 00 -> charge, 01 -> discharge, 10/11 -> hold.
         for basis_index, probability in enumerate(basis_probabilities):
             action_code = basis_index & 0b11
-
             if action_code == 0:
                 action_probs[0] += probability
             elif action_code == 1:
@@ -105,17 +85,22 @@ class QuantumPolicy:
             else:
                 action_probs[2] += probability
 
-        # Protect against small floating-point deviations.
-        action_probs /= action_probs.sum()
-        return action_probs
+        total = action_probs.sum()
+        if total <= 0:
+            return np.full(3, 1 / 3, dtype=float)
+
+        return action_probs / total
 
     def select_action(self, observation):
-        """Choose the action with the highest quantum-policy probability."""
+        """Deterministic action selection for evaluation."""
+        return int(np.argmax(self.action_probabilities(observation)))
+
+    def sample_action(self, observation):
+        """Sample an action from the policy for training."""
         probabilities = self.action_probabilities(observation)
-        return int(np.argmax(probabilities))
+        return int(self.rng.choice(3, p=probabilities))
 
     def set_weights(self, weights):
-        """Set trainable circuit parameters, useful for optimization."""
         weights = np.asarray(weights, dtype=float)
 
         if weights.shape != self.weights.shape:
@@ -123,7 +108,6 @@ class QuantumPolicy:
                 f"Expected weights shape {self.weights.shape}, "
                 f"got {weights.shape}"
             )
-
         if not np.all(np.isfinite(weights)):
             raise ValueError("Weights must contain finite values.")
 
