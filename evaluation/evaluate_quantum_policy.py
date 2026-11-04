@@ -15,16 +15,22 @@ from agents.q_learning_agent import QLearningAgent
 
 
 def load_quantum_policy():
-    weights_path = PROJECT_ROOT / "models" / "quantum_policy_weights.npy"
+    # Evaluate the best policy selected during checkpointed training.
+    weights_path = (
+        PROJECT_ROOT / "models" / "quantum_policy_best_weights.npy"
+    )
 
     if not weights_path.exists():
         raise FileNotFoundError(
-            "Trained quantum weights not found. Run training first."
+            "Best quantum policy weights not found. "
+            "Run quantum training with checkpointing first."
         )
 
     policy = QuantumPolicy()
     weights = np.load(weights_path)
     policy.set_weights(weights)
+
+    print(f"Loaded best quantum policy from: {weights_path}")
     return policy
 
 
@@ -50,13 +56,14 @@ def run_episode(env, agent, seed, agent_type):
     total_terminal_penalty = 0.0
 
     terminated = False
+    truncated = False
+    info = {}
 
-    while not terminated:
-        if agent_type == "quantum":
-            action = agent.select_action(observation)
-        elif agent_type == "rule":
+    while not (terminated or truncated):
+        if agent_type in ("quantum", "rule"):
             action = agent.select_action(observation)
         elif agent_type == "q_learning":
+            # Greedy evaluation: disable training exploration.
             action = agent.select_action(observation, training=False)
         else:
             raise ValueError(f"Unknown agent type: {agent_type}")
@@ -69,80 +76,96 @@ def run_episode(env, agent, seed, agent_type):
         total_terminal_penalty += info["terminal_penalty"]
 
     return {
-        "total_reward": total_reward,
-        "energy_cost": total_energy_cost,
-        "wear_penalty": total_wear_penalty,
-        "terminal_penalty": total_terminal_penalty,
-        "final_soc": info["soc"],
-        "terminal_soc_met": info["terminal_soc_met"],
+        "total_reward": float(total_reward),
+        "energy_cost": float(total_energy_cost),
+        "wear_penalty": float(total_wear_penalty),
+        "terminal_penalty": float(total_terminal_penalty),
+        "final_soc": float(info["soc"]),
+        "terminal_soc_met": bool(info["terminal_soc_met"]),
     }
 
 
 def evaluate_agents(num_episodes=30, seed=1000):
+    if num_episodes < 1:
+        raise ValueError("num_episodes must be positive.")
+
     env = BatteryEnv()
 
-    quantum_agent = load_quantum_policy()
-    rule_agent = RuleBasedAgent()
-    q_learning_agent = load_q_learning_agent()
+    try:
+        quantum_agent = load_quantum_policy()
+        rule_agent = RuleBasedAgent()
+        q_learning_agent = load_q_learning_agent()
 
-    agents = [
-        ("Quantum Policy", quantum_agent, "quantum"),
-        ("Rule-Based", rule_agent, "rule"),
-        ("Tabular Q-Learning", q_learning_agent, "q_learning"),
-    ]
+        agents = [
+            ("Quantum Policy", quantum_agent, "quantum"),
+            ("Rule-Based", rule_agent, "rule"),
+            ("Tabular Q-Learning", q_learning_agent, "q_learning"),
+        ]
 
-    records = []
-    scenario_seeds = [seed + i for i in range(num_episodes)]
+        records = []
+        scenario_seeds = [
+            int(seed + i) for i in range(num_episodes)
+        ]
 
-    for agent_name, agent, agent_type in agents:
-        print(f"Evaluating {agent_name}...")
+        for agent_name, agent, agent_type in agents:
+            print(f"Evaluating {agent_name}...")
 
-        for episode, scenario_seed in enumerate(scenario_seeds, start=1):
-            metrics = run_episode(
-                env, agent, scenario_seed, agent_type
-            )
+            for episode, scenario_seed in enumerate(
+                scenario_seeds, start=1
+            ):
+                metrics = run_episode(
+                    env,
+                    agent,
+                    scenario_seed,
+                    agent_type,
+                )
 
-            records.append({
-                "agent": agent_name,
-                "episode": episode,
-                "seed": scenario_seed,
-                **metrics,
-            })
+                records.append({
+                    "agent": agent_name,
+                    "episode": episode,
+                    "seed": scenario_seed,
+                    **metrics,
+                })
 
-    env.close()
+        results_dir = PROJECT_ROOT / "results"
+        results_dir.mkdir(exist_ok=True)
 
-    results_dir = PROJECT_ROOT / "results"
-    results_dir.mkdir(exist_ok=True)
-
-    details = pd.DataFrame(records)
-    details.to_csv(
-        results_dir / "quantum_agent_comparison_details.csv",
-        index=False
-    )
-
-    summary = (
-        details.groupby("agent")
-        .agg(
-            mean_reward=("total_reward", "mean"),
-            std_reward=("total_reward", "std"),
-            mean_energy_cost=("energy_cost", "mean"),
-            mean_wear_penalty=("wear_penalty", "mean"),
-            mean_terminal_penalty=("terminal_penalty", "mean"),
-            mean_final_soc=("final_soc", "mean"),
-            terminal_soc_success_rate=("terminal_soc_met", "mean"),
+        details = pd.DataFrame(records)
+        details.to_csv(
+            results_dir / "quantum_agent_comparison_details.csv",
+            index=False,
         )
-        .reset_index()
-    )
 
-    summary.to_csv(
-        results_dir / "quantum_agent_comparison_summary.csv",
-        index=False
-    )
+        summary = (
+            details.groupby("agent")
+            .agg(
+                mean_reward=("total_reward", "mean"),
+                std_reward=("total_reward", "std"),
+                mean_energy_cost=("energy_cost", "mean"),
+                mean_wear_penalty=("wear_penalty", "mean"),
+                mean_terminal_penalty=("terminal_penalty", "mean"),
+                mean_final_soc=("final_soc", "mean"),
+                terminal_soc_success_rate=("terminal_soc_met", "mean"),
+            )
+            .reset_index()
+        )
 
-    print("\nAgent comparison summary:")
-    print(summary.to_string(index=False))
+        summary.to_csv(
+            results_dir / "quantum_agent_comparison_summary.csv",
+            index=False,
+        )
 
-    return details, summary
+        print("\nAgent comparison summary:")
+        print(summary.to_string(index=False))
+
+        print("\nSaved comparison results:")
+        print(results_dir / "quantum_agent_comparison_details.csv")
+        print(results_dir / "quantum_agent_comparison_summary.csv")
+
+        return details, summary
+
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
