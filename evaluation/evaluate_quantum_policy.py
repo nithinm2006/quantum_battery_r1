@@ -12,7 +12,11 @@ from env.battery_env import BatteryEnv
 from agents.quantum_policy import QuantumPolicy
 from agents.rule_based_agent import RuleBasedAgent
 from agents.q_learning_agent import QLearningAgent
-
+from config.experiment_config import (
+    EVALUATION_SEED,
+    EVALUATION_EPISODES,
+    EXPERIMENT_NAME,
+)
 
 def load_quantum_policy():
     # Evaluate the best policy selected during checkpointed training.
@@ -85,7 +89,7 @@ def run_episode(env, agent, seed, agent_type):
     }
 
 
-def evaluate_agents(num_episodes=30, seed=1000):
+def evaluate_agents(num_episodes=EVALUATION_EPISODES, seed=EVALUATION_SEED):
     if num_episodes < 1:
         raise ValueError("num_episodes must be positive.")
 
@@ -121,6 +125,7 @@ def evaluate_agents(num_episodes=30, seed=1000):
                 )
 
                 records.append({
+                    "experiment": EXPERIMENT_NAME,
                     "agent": agent_name,
                     "episode": episode,
                     "seed": scenario_seed,

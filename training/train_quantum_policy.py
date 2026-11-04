@@ -10,6 +10,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from config.experiment_config import (
+    TRAINING_SEED,
+    TRAINING_ITERATIONS,
+    EPISODES_PER_ESTIMATE,
+    SPSA_LEARNING_RATE,
+    SPSA_PERTURBATION,
+    VALIDATION_SEED_OFFSET,
+    VALIDATION_EPISODES,
+    EXPERIMENT_NAME,
+)    
+
 from env.battery_env import BatteryEnv
 from agents.quantum_policy import QuantumPolicy
 
@@ -94,6 +105,16 @@ def save_checkpoint(
         "best_reward": float(best_reward),
         "rng_state": rng.bit_generator.state,
         "history": history,
+         "experiment_name": EXPERIMENT_NAME,
+         "experiment_config": {
+                 "seed": TRAINING_SEED,
+    "iterations": TRAINING_ITERATIONS,
+    "episodes_per_estimate": EPISODES_PER_ESTIMATE,
+    "learning_rate": SPSA_LEARNING_RATE,
+    "perturbation": SPSA_PERTURBATION,
+    "validation_seed_offset": VALIDATION_SEED_OFFSET,
+    "validation_episodes": VALIDATION_EPISODES,
+      },
     }
 
     temporary_path = CHECKPOINT_PATH.with_suffix(".tmp")
@@ -123,11 +144,11 @@ def load_checkpoint():
 
 
 def train_quantum_policy(
-    iterations=80,
-    episodes_per_estimate=2,
-    seed=42,
-    learning_rate=0.08,
-    perturbation=0.1,
+    iterations=TRAINING_ITERATIONS,
+    episodes_per_estimate=EPISODES_PER_ESTIMATE,
+    seed=TRAINING_SEED,
+    learning_rate=SPSA_LEARNING_RATE,
+    perturbation=SPSA_PERTURBATION,
     resume=False,
 ):
     """
@@ -154,11 +175,15 @@ def train_quantum_policy(
 
     # Fixed validation scenarios used to select the best policy.
     validation_seeds = [
-        int(value)
-        for value in np.random.default_rng(seed + 10_000).integers(
-            0, 1_000_000, size=10
-        )
-    ]
+    int(value)
+    for value in np.random.default_rng(
+        seed + VALIDATION_SEED_OFFSET
+    ).integers(
+        0,
+        1_000_000,
+        size=VALIDATION_EPISODES,
+    )
+]
 
     if resume:
         checkpoint = load_checkpoint()
@@ -305,10 +330,10 @@ if __name__ == "__main__":
         description="Train the hybrid quantum battery policy."
     )
     parser.add_argument(
-        "--iterations",
-        type=int,
-        default=80,
-        help="Total target number of SPSA iterations.",
+    "--iterations",
+    type=int,
+    default=TRAINING_ITERATIONS,
+    help="Total target number of SPSA iterations.",
     )
     parser.add_argument(
         "--resume",
