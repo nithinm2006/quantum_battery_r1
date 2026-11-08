@@ -1,246 +1,228 @@
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
-
-# --------------------------------------------------
-# Paths
-# --------------------------------------------------
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-RESULTS_DIR = ROOT_DIR / "results"
-
-DETAILS_PATH = RESULTS_DIR / "quantum_agent_comparison_details.csv"
-SUMMARY_PATH = RESULTS_DIR / "quantum_agent_comparison_summary.csv"
-
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+RESULTS_DIR = PROJECT_ROOT / "results"
 FIGURES_DIR = RESULTS_DIR / "figures"
-FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
+SUMMARY_PATH = RESULTS_DIR / "quantum_agent_comparison_summary.csv"
+DETAILS_PATH = RESULTS_DIR / "quantum_agent_comparison_details.csv"
+PAIRWISE_PATH = RESULTS_DIR / "quantum_agent_pairwise_comparison.csv"
 
 
-# --------------------------------------------------
-# Load evaluation results
-# --------------------------------------------------
+def save_figure(fig, filename):
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-if not DETAILS_PATH.exists():
-    raise FileNotFoundError(f"Missing evaluation file: {DETAILS_PATH}")
-
-if not SUMMARY_PATH.exists():
-    raise FileNotFoundError(f"Missing summary file: {SUMMARY_PATH}")
-
-details = pd.read_csv(DETAILS_PATH)
-summary = pd.read_csv(SUMMARY_PATH)
-
-print("Detailed results columns:")
-print(details.columns.tolist())
-
-print("\nSummary results:")
-print(summary.to_string(index=False))
-
-
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
-
-def find_column(dataframe, candidates):
-    """Find a column using case-insensitive candidate names."""
-    normalized = {
-        column.lower().replace(" ", "_"): column
-        for column in dataframe.columns
-    }
-
-    for candidate in candidates:
-        key = candidate.lower().replace(" ", "_")
-        if key in normalized:
-            return normalized[key]
-
-    return None
-
-
-def save_bar_chart(data, x_column, y_column, title, ylabel, filename,
-                   percentage=False):
-    """Create and save a labeled bar chart."""
-    if x_column is None or y_column is None:
-        print(f"Skipping '{title}': required columns were not found.")
-        return
-
-    plot_data = data[[x_column, y_column]].copy()
-    plot_data[y_column] = pd.to_numeric(
-        plot_data[y_column], errors="coerce"
-    )
-    plot_data = plot_data.dropna()
-
-    if plot_data.empty:
-        print(f"Skipping '{title}': no valid data.")
-        return
-
-    if percentage:
-        # Convert proportions to percentages if values are in [0, 1].
-        if plot_data[y_column].max() <= 1:
-            plot_data[y_column] *= 100
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    bars = ax.bar(
-        plot_data[x_column].astype(str),
-        plot_data[y_column]
-    )
-
-    ax.set_title(title)
-    ax.set_xlabel("Agent")
-    ax.set_ylabel(ylabel)
-    ax.grid(axis="y", linestyle="--", alpha=0.35)
-    ax.set_axisbelow(True)
-
-    for bar, value in zip(bars, plot_data[y_column]):
-        label = f"{value:.1f}%" if percentage else f"{value:.2f}"
-        ax.annotate(
-            label,
-            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
-            xytext=(0, 4),
-            textcoords="offset points",
-            ha="center",
-            va="bottom"
-        )
-
-    fig.tight_layout()
     output_path = FIGURES_DIR / filename
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
     print(f"Saved: {output_path}")
 
 
-# --------------------------------------------------
-# Identify summary columns
-# --------------------------------------------------
+def load_results():
+    required_files = [
+        SUMMARY_PATH,
+        DETAILS_PATH,
+        PAIRWISE_PATH,
+    ]
 
-agent_column = find_column(
-    summary,
-    ["agent", "agent_name", "policy", "model"]
-)
+    for path in required_files:
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Required evaluation file not found: {path}\n"
+                "Run evaluation/evaluate_quantum_policy.py first."
+            )
 
-if agent_column is None:
-    raise ValueError(
-        "Could not identify the agent column in the summary CSV. "
-        f"Available columns: {summary.columns.tolist()}"
+    summary = pd.read_csv(SUMMARY_PATH)
+    details = pd.read_csv(DETAILS_PATH)
+    pairwise = pd.read_csv(PAIRWISE_PATH)
+
+    required_summary = {
+        "agent",
+        "mean_reward",
+        "reward_ci_95_lower",
+        "reward_ci_95_upper",
+        "mean_energy_cost",
+        "mean_final_soc",
+        "terminal_soc_success_rate",
+    }
+
+    required_details = {"agent", "total_reward"}
+
+    required_pairwise = {
+        "comparison",
+        "quantum_win_rate",
+    }
+
+    for name, dataframe, required in [
+        ("Summary", summary, required_summary),
+        ("Details", details, required_details),
+        ("Pairwise", pairwise, required_pairwise),
+    ]:
+        missing = required - set(dataframe.columns)
+
+        if missing:
+            raise ValueError(
+                f"{name} CSV is missing columns: {sorted(missing)}"
+            )
+
+    return summary, details, pairwise
+
+
+def plot_mean_reward(summary):
+    agents = summary["agent"]
+    means = summary["mean_reward"].to_numpy()
+
+    lower = summary["reward_ci_95_lower"].to_numpy()
+    upper = summary["reward_ci_95_upper"].to_numpy()
+
+    errors = np.vstack([
+        means - lower,
+        upper - means,
+    ])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.bar(agents, means, yerr=errors, capsize=6)
+
+    ax.set_title("Mean Episode Reward with 95% Confidence Intervals")
+    ax.set_xlabel("Agent")
+    ax.set_ylabel("Mean Reward")
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+
+    save_figure(fig, "agent_mean_reward.png")
+
+
+def plot_reward_distribution(details):
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    agent_names = details["agent"].drop_duplicates().tolist()
+
+    reward_groups = [
+        details.loc[
+            details["agent"] == agent,
+            "total_reward",
+        ].dropna().to_numpy()
+        for agent in agent_names
+    ]
+
+    ax.boxplot(
+        reward_groups,
+        tick_labels=agent_names,
+        showmeans=True,
     )
 
-reward_column = find_column(
-    summary,
-    ["mean_reward", "average_reward", "avg_reward", "reward_mean"]
-)
+    ax.set_title("Episode Reward Distribution")
+    ax.set_xlabel("Agent")
+    ax.set_ylabel("Episode Reward")
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
 
-cost_column = find_column(
-    summary,
-    ["mean_energy_cost", "average_energy_cost", "avg_energy_cost",
-     "energy_cost_mean"]
-)
-
-soc_column = find_column(
-    summary,
-    ["mean_final_soc", "average_final_soc", "avg_final_soc",
-     "final_soc_mean"]
-)
-
-success_column = find_column(
-    summary,
-    ["terminal_soc_success_rate", "soc_success_rate",
-     "terminal_success_rate", "success_rate"]
-)
+    save_figure(fig, "agent_reward_distribution.png")
 
 
-# --------------------------------------------------
-# Generate comparison charts
-# --------------------------------------------------
+def plot_energy_cost(summary):
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-save_bar_chart(
-    summary,
-    agent_column,
-    reward_column,
-    title="Average Episode Reward by Agent",
-    ylabel="Mean Episode Reward",
-    filename="agent_mean_reward.png"
-)
-
-save_bar_chart(
-    summary,
-    agent_column,
-    cost_column,
-    title="Average Energy Cost by Agent",
-    ylabel="Mean Energy Cost",
-    filename="agent_energy_cost.png"
-)
-
-save_bar_chart(
-    summary,
-    agent_column,
-    soc_column,
-    title="Average Final State of Charge by Agent",
-    ylabel="Final SOC",
-    filename="agent_final_soc.png"
-)
-
-save_bar_chart(
-    summary,
-    agent_column,
-    success_column,
-    title="Terminal SOC Target Success Rate",
-    ylabel="Success Rate (%)",
-    filename="agent_terminal_soc_success_rate.png",
-    percentage=True
-)
-
-
-# --------------------------------------------------
-# Optional: reward distribution from detailed results
-# --------------------------------------------------
-
-detail_agent_column = find_column(
-    details,
-    ["agent", "agent_name", "policy", "model"]
-)
-
-detail_reward_column = find_column(
-    details,
-    ["episode_reward", "total_reward", "reward"]
-)
-
-if detail_agent_column and detail_reward_column:
-    plot_data = details[
-        [detail_agent_column, detail_reward_column]
-    ].copy()
-
-    plot_data[detail_reward_column] = pd.to_numeric(
-        plot_data[detail_reward_column], errors="coerce"
+    ax.bar(
+        summary["agent"],
+        summary["mean_energy_cost"],
     )
-    plot_data = plot_data.dropna()
 
-    if not plot_data.empty:
-        agents = plot_data[detail_agent_column].unique()
-        reward_groups = [
-            plot_data.loc[
-                plot_data[detail_agent_column] == agent,
-                detail_reward_column
-            ].values
-            for agent in agents
-        ]
+    ax.set_title("Average Energy Cost Comparison")
+    ax.set_xlabel("Agent")
+    ax.set_ylabel("Mean Energy Cost")
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
 
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.boxplot(reward_groups, tick_labels=agents)
+    save_figure(fig, "agent_energy_cost.png")
 
-        ax.set_title("Episode Reward Distribution by Agent")
-        ax.set_xlabel("Agent")
-        ax.set_ylabel("Episode Reward")
-        ax.grid(axis="y", linestyle="--", alpha=0.35)
-        ax.set_axisbelow(True)
 
-        fig.tight_layout()
+def plot_final_soc(summary):
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-        output_path = FIGURES_DIR / "agent_reward_distribution.png"
-        fig.savefig(output_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+    ax.bar(
+        summary["agent"],
+        summary["mean_final_soc"],
+    )
 
-        print(f"Saved: {output_path}")
+    ax.set_title("Average Final Battery State of Charge")
+    ax.set_xlabel("Agent")
+    ax.set_ylabel("Final SOC")
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
 
-print("\nVisualization completed.")
+    save_figure(fig, "agent_final_soc.png")
+
+
+def plot_terminal_success(summary):
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    success_rates = (
+        summary["terminal_soc_success_rate"] * 100
+    )
+
+    ax.bar(
+        summary["agent"],
+        success_rates,
+    )
+
+    ax.set_title("Terminal SOC Success Rate")
+    ax.set_xlabel("Agent")
+    ax.set_ylabel("Success Rate (%)")
+    ax.set_ylim(0, 100)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+
+    save_figure(fig, "agent_terminal_soc_success.png")
+
+
+def plot_quantum_win_rates(pairwise):
+    if pairwise.empty:
+        print("No pairwise comparison data available.")
+        return
+
+    comparisons = pairwise["comparison"]
+    win_rates = pairwise["quantum_win_rate"] * 100
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.bar(comparisons, win_rates)
+
+    ax.set_title("Quantum Policy Win Rate Against Baselines")
+    ax.set_xlabel("Comparison")
+    ax.set_ylabel("Quantum Win Rate (%)")
+    ax.set_ylim(0, 100)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+
+    plt.setp(
+        ax.get_xticklabels(),
+        rotation=10,
+        ha="right",
+    )
+
+    save_figure(fig, "quantum_policy_win_rate.png")
+
+
+def main():
+    print("Loading evaluation results...")
+
+    summary, details, pairwise = load_results()
+
+    print("\nGenerating agent comparison dashboard...")
+
+    plot_mean_reward(summary)
+    plot_reward_distribution(details)
+    plot_energy_cost(summary)
+    plot_final_soc(summary)
+    plot_terminal_success(summary)
+    plot_quantum_win_rates(pairwise)
+
+    print("\nDashboard generation completed.")
+    print(f"All figures saved in: {FIGURES_DIR}")
+
+
+if __name__ == "__main__":
+    main()
