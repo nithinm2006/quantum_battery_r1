@@ -14,12 +14,25 @@ class BatteryEnv(gym.Env):
         charge_efficiency=0.95,
         discharge_efficiency=0.95,
         wear_cost=0.05,
-        terminal_penalty_rate=20.0
+        terminal_penalty_rate=20.0,
+        price_noise_std=0.4,
+        demand_noise_std=2.0,
     ):
-
         super().__init__()
 
-        # Battery specifications
+        if capacity <= 0:
+            raise ValueError("capacity must be positive.")
+        if max_power <= 0:
+            raise ValueError("max_power must be positive.")
+        if not 0.0 <= initial_soc <= 1.0:
+            raise ValueError("initial_soc must be between 0 and 1.")
+        if not 0 < charge_efficiency <= 1:
+            raise ValueError("charge_efficiency must be in (0, 1].")
+        if not 0 < discharge_efficiency <= 1:
+            raise ValueError("discharge_efficiency must be in (0, 1].")
+        if price_noise_std < 0 or demand_noise_std < 0:
+            raise ValueError("Noise standard deviations cannot be negative.")
+
         self.capacity = capacity
         self.max_power = max_power
         self.initial_soc = initial_soc
@@ -30,14 +43,11 @@ class BatteryEnv(gym.Env):
         self.wear_cost = wear_cost
         self.terminal_penalty_rate = terminal_penalty_rate
 
-        # Action space:
-        # 0 = Charge
-        # 1 = Discharge
-        # 2 = Hold
+        self.price_noise_std = price_noise_std
+        self.demand_noise_std = demand_noise_std
+
         self.action_space = spaces.Discrete(3)
 
-        # Observation space:
-        # SOC, Electricity Price, Demand, Hour
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
@@ -52,9 +62,7 @@ class BatteryEnv(gym.Env):
         self.prices = None
         self.demands = None
 
-    # Generate synthetic electricity price and demand
     def generate_daily_data(self):
-
         hours = np.arange(24)
 
         morning_peak = 2.0 * np.exp(
@@ -74,7 +82,11 @@ class BatteryEnv(gym.Env):
             + morning_peak
             + evening_peak
             - midday_discount
-            + self.np_random.normal(0, 0.4, 24)
+            + self.np_random.normal(
+                0,
+                self.price_noise_std,
+                24
+            )
         )
 
         self.prices = np.clip(self.prices, 3, 15)
@@ -83,14 +95,16 @@ class BatteryEnv(gym.Env):
             35
             + 8 * np.exp(-((hours - 8) / 2) ** 2)
             + 18 * np.exp(-((hours - 19) / 3) ** 2)
-            + self.np_random.normal(0, 2, 24)
+            + self.np_random.normal(
+                0,
+                self.demand_noise_std,
+                24
+            )
         )
 
         self.demands = np.clip(self.demands, 5, 100)
 
-    # Return current state
     def get_observation(self):
-
         hour = min(self.current_step, 23)
 
         observation = np.array([
@@ -102,9 +116,7 @@ class BatteryEnv(gym.Env):
 
         return observation
 
-    # Reset environment
     def reset(self, seed=None, options=None):
-
         super().reset(seed=seed)
 
         self.current_step = 0
@@ -122,9 +134,7 @@ class BatteryEnv(gym.Env):
 
         return observation, info
 
-    # Execute an action
     def step(self, action):
-
         if self.current_step >= 24:
             raise RuntimeError(
                 "Episode has ended. Call reset() before step()."
@@ -142,9 +152,7 @@ class BatteryEnv(gym.Env):
         discharge_energy = 0.0
         throughput = 0.0
 
-        # Action 0: Charge
         if action == 0:
-
             available_space = self.capacity - self.soc
 
             charge_energy = min(
@@ -159,9 +167,7 @@ class BatteryEnv(gym.Env):
             self.soc += stored_energy
             throughput = stored_energy
 
-        # Action 1: Discharge
         elif action == 1:
-
             discharge_energy = min(
                 self.max_power,
                 self.soc * self.discharge_efficiency
@@ -174,34 +180,22 @@ class BatteryEnv(gym.Env):
             self.soc -= battery_energy_used
             throughput = battery_energy_used
 
-        # Action 2: Hold
-        elif action == 2:
-            pass
-
-        # Grid energy calculation
-        # Positive = Importing energy
-        # Negative = Exporting energy
-
         grid_energy = (
             demand + charge_energy - discharge_energy
         )
 
         energy_cost = grid_energy * price
-
         wear_penalty = throughput * self.wear_cost
 
-        # Advance simulation by one hour
         self.current_step += 1
 
         terminated = self.current_step >= 24
         truncated = False
 
-        # Terminal SOC penalty
         terminal_shortfall = 0.0
         terminal_penalty = 0.0
 
         if terminated:
-
             terminal_shortfall = max(
                 0.0,
                 self.initial_soc_kwh - self.soc
@@ -211,7 +205,6 @@ class BatteryEnv(gym.Env):
                 terminal_shortfall * self.terminal_penalty_rate
             )
 
-        # Final reward
         reward = (
             -energy_cost
             - wear_penalty
