@@ -1,0 +1,3 @@
+agent,trainable_parameters,training_iterations,best_validation_reward,mean_evaluation_reward,std_evaluation_reward,mean_energy_cost,mean_final_soc,terminal_soc_success_rate,training_time_seconds,evaluation_time_seconds,mean_inference_time_ms
+Quantum Policy,24,80,-7731.777711780759,-7712.233099012467,93.31742461316865,7712.233099012467,50.0,1.0,95.74381300000005,2.173056900000006,3.18149194444304
+Classical Neural Policy,67,80,-7731.777711780759,-7712.233099012467,93.31742461316865,7712.233099012467,50.0,1.0,1.3811885999999731,0.036637400000017806,0.03025319444544847
