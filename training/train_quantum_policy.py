@@ -34,8 +34,21 @@ CHECKPOINT_PATH = MODELS_DIR / "quantum_training_checkpoint.npz"
 HISTORY_PATH = RESULTS_DIR / "quantum_training_history.csv"
 
 
-def run_episode(env, policy, seed, deterministic=False):
+def run_episode(
+    env,
+    policy,
+    seed,
+    deterministic=False,
+    action_seed=None,
+):
     observation, _ = env.reset(seed=int(seed))
+
+    # Independent RNG for reproducible stochastic actions.
+    action_rng = (
+        np.random.default_rng(int(action_seed))
+        if action_seed is not None
+        else None
+    )
 
     total_reward = 0.0
     total_energy_cost = 0.0
@@ -50,7 +63,10 @@ def run_episode(env, policy, seed, deterministic=False):
         if deterministic:
             action = policy.select_action(observation)
         else:
-            action = policy.sample_action(observation)
+            action = policy.sample_action(
+                observation,
+                rng=action_rng,
+            )
 
         observation, reward, terminated, truncated, info = env.step(action)
 
@@ -70,18 +86,30 @@ def run_episode(env, policy, seed, deterministic=False):
 
 
 def evaluate_weights(env, policy, weights, seeds):
-    """Evaluate weights deterministically on a fixed set of scenarios."""
+    """
+    Evaluate policy weights using stochastic action selection.
+
+    Each environment seed gets a matching action RNG seed.
+    This reduces randomness when comparing SPSA perturbations.
+    """
     policy.set_weights(weights)
 
-    returns = [
-        run_episode(
+    returns = []
+
+    for seed in seeds:
+        action_seed = (
+            int(seed) + 104729
+        ) % (2**32)
+
+        result = run_episode(
             env,
             policy,
             seed,
-            deterministic=True,
-        )["reward"]
-        for seed in seeds
-    ]
+            deterministic=False,
+            action_seed=action_seed,
+        )
+
+        returns.append(result["reward"])
 
     return float(np.mean(returns))
 
@@ -262,10 +290,11 @@ def train_quantum_policy(
             # Separate stochastic rollout for training progress metrics.
             report_seed = int(rng.integers(0, 1_000_000))
             report = run_episode(
-                env,
-                policy,
-                report_seed,
-                deterministic=False,
+                  env,
+                 policy,
+                 report_seed,
+                 deterministic=False,
+                 action_seed=(report_seed + 104729) % (2**32),
             )
 
             history.append({
