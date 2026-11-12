@@ -1,0 +1,3 @@
+agent,total_steps,charge_count,discharge_count,hold_count,charge_percentage,discharge_percentage,hold_percentage,total_action_switches,average_switches_per_episode,dominant_action,dominant_action_percentage,potentially_stuck
+Quantum,720,0,0,720,0.0,0.0,100.0,0,0.0,Hold,100.0,True
+Rule-Based,720,68,68,584,9.444444444444445,9.444444444444445,81.11111111111111,163,5.433333333333334,Hold,81.11111111111111,False
