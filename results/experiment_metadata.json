@@ -1,0 +1,45 @@
+{
+    "experiment": {
+        "name": "hybrid_quantum_battery_rl",
+        "timestamp_utc": "2026-11-12T17:48:54.822375+00:00"
+    },
+    "software": {
+        "python_version": "3.11.0 (main, Oct 24 2022, 18:26:48) [MSC v.1933 64 bit (AMD64)]",
+        "numpy_version": "2.4.6",
+        "platform": "Windows-10-10.0.26300-SP0"
+    },
+    "configuration": {
+        "TRAINING_SEED": 42,
+        "EVALUATION_SEED": 1000,
+        "VALIDATION_SEED_OFFSET": 10000,
+        "TRAINING_ITERATIONS": 80,
+        "EPISODES_PER_ESTIMATE": 2,
+        "SPSA_LEARNING_RATE": 0.08,
+        "SPSA_PERTURBATION": 0.1,
+        "VALIDATION_EPISODES": 10,
+        "EVALUATION_EPISODES": 30,
+        "EXPERIMENT_NAME": "hybrid_quantum_battery_rl"
+    },
+    "environment": {
+        "class": "BatteryEnv",
+        "default_parameters": {
+            "capacity": 100.0,
+            "max_power": 25.0,
+            "initial_soc": 0.5,
+            "charge_efficiency": 0.95,
+            "discharge_efficiency": 0.95,
+            "wear_cost": 0.05,
+            "terminal_penalty_rate": 20.0,
+            "price_noise_std": 0.4,
+            "demand_noise_std": 2.0
+        }
+    },
+    "git": {
+        "commit_hash": "00d2a20a0c3734408ba78452cbfeb5de7af163d4",
+        "working_tree_clean": false
+    },
+    "additional_information": {
+        "project": "Quantum Battery Reinforcement Learning",
+        "description": "Hybrid quantum reinforcement learning for battery energy management."
+    }
+}
