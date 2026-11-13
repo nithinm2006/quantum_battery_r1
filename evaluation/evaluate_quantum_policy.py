@@ -66,6 +66,11 @@ def run_episode(env, agent, seed, agent_type):
     total_wear_penalty = 0.0
     total_terminal_penalty = 0.0
 
+    total_baseline_grid_cost = 0.0
+    total_charge_energy = 0.0
+    total_discharge_energy = 0.0
+    total_battery_cost_impact = 0.0
+
     terminated = False
     truncated = False
     info = {}
@@ -85,12 +90,27 @@ def run_episode(env, agent, seed, agent_type):
 
         total_reward += reward
         total_energy_cost += info["energy_cost"]
+        baseline_cost = info["demand"] * info["price"]
+
+        total_charge_energy += info["charge_energy"]
+        total_discharge_energy += info["discharge_energy"]
+
+        total_battery_cost_impact += (
+        info["energy_cost"] - baseline_cost
+        )
         total_wear_penalty += info["wear_penalty"]
         total_terminal_penalty += info["terminal_penalty"]
 
     return {
         "total_reward": float(total_reward),
         "energy_cost": float(total_energy_cost),
+        "baseline_grid_cost": float(total_baseline_grid_cost),
+        "battery_cost_impact": float(total_battery_cost_impact),
+        "battery_savings": float(
+                 total_baseline_grid_cost - total_energy_cost
+        ),
+        "charge_energy": float(total_charge_energy),
+        "discharge_energy": float(total_discharge_energy),  
         "wear_penalty": float(total_wear_penalty),
         "terminal_penalty": float(total_terminal_penalty),
         "final_soc": float(info["soc"]),

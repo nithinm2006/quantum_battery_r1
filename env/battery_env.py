@@ -224,6 +224,9 @@ class BatteryEnv(gym.Env):
             "wear_penalty": wear_penalty,
             "terminal_shortfall": terminal_shortfall,
             "terminal_penalty": terminal_penalty,
+            "charge_energy": float(charge_energy),
+            "discharge_energy": float(discharge_energy),
+            "throughput": float(throughput),
             "terminal_soc_target": self.initial_soc_kwh,
             "terminal_soc_met": (
                 self.soc >= self.initial_soc_kwh - 1e-6
