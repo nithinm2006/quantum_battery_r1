@@ -30,7 +30,7 @@ from agents.quantum_policy import QuantumPolicy
 RESULTS_DIR = PROJECT_ROOT / "results"
 SUMMARY_PATH = RESULTS_DIR / "classical_quantum_benchmark.csv"
 DETAILS_PATH = RESULTS_DIR / "classical_quantum_benchmark_details.csv"
-
+COMPARISON_PATH = RESULTS_DIR / "classical_quantum_paired_comparison.csv"
 HIDDEN_UNITS = 8
 
 
@@ -166,7 +166,68 @@ def evaluate_policy(env, policy, seeds):
         run_episode(env, policy, seed)
         for seed in seeds
     ]
+def compare_policies_paired(
+    quantum_results,
+    classical_results,
+    n_bootstrap=5000,
+    seed=42
+):
+    """
+    Compare policies episode-by-episode using identical evaluation scenarios.
+    Positive reward differences favor the quantum policy.
+    """
 
+    if len(quantum_results) != len(classical_results):
+        raise ValueError(
+            "Both policies must have the same number of evaluation episodes."
+        )
+
+    if not quantum_results:
+        raise ValueError("Evaluation results cannot be empty.")
+
+    quantum_rewards = np.array(
+        [item["reward"] for item in quantum_results],
+        dtype=float
+    )
+
+    classical_rewards = np.array(
+        [item["reward"] for item in classical_results],
+        dtype=float
+    )
+
+    differences = quantum_rewards - classical_rewards
+
+    rng = np.random.default_rng(seed)
+    bootstrap_means = np.empty(n_bootstrap)
+
+    for i in range(n_bootstrap):
+        sampled = rng.choice(
+            differences,
+            size=len(differences),
+            replace=True
+        )
+        bootstrap_means[i] = np.mean(sampled)
+
+    ci_lower, ci_upper = np.percentile(
+        bootstrap_means,
+        [2.5, 97.5]
+    )
+
+    quantum_wins = int(np.sum(differences > 1e-9))
+    classical_wins = int(np.sum(differences < -1e-9))
+    ties = int(np.sum(np.isclose(differences, 0.0, atol=1e-9)))
+
+    return {
+        "scenarios_compared": len(differences),
+        "quantum_wins": quantum_wins,
+        "classical_wins": classical_wins,
+        "ties": ties,
+        "quantum_win_rate": quantum_wins / len(differences),
+        "mean_reward_difference": float(np.mean(differences)),
+        "median_reward_difference": float(np.median(differences)),
+        "reward_difference_ci_95_lower": float(ci_lower),
+        "reward_difference_ci_95_upper": float(ci_upper)
+    }
 
 def train_with_spsa(policy, env, validation_seeds, label):
     """Train either policy with the same SPSA settings."""
@@ -309,6 +370,8 @@ def main():
     summary_rows = []
     detail_rows = []
 
+    evaluation_results_by_agent = {}
+
     print("\nCLASSICAL VS QUANTUM POLICY BENCHMARK")
     print("=" * 65)
 
@@ -329,6 +392,7 @@ def main():
             policy,
             evaluation_seeds,
         )
+        evaluation_results_by_agent[name] = episode_results
         evaluation_time = time.perf_counter() - evaluation_start
 
         rewards = [item["reward"] for item in episode_results]
@@ -385,12 +449,33 @@ def main():
     summary_df = pd.DataFrame(summary_rows)
     details_df = pd.DataFrame(detail_rows)
 
+    paired_result = compare_policies_paired(
+          quantum_results=evaluation_results_by_agent["Quantum Policy"],
+          classical_results=evaluation_results_by_agent[
+              "Classical Neural Policy"
+       ],
+    n_bootstrap=5000,
+    seed=EVALUATION_SEED
+     )
+
+    paired_result["comparison"] = (
+       "Quantum Policy vs Classical Neural Policy"
+     ) 
+
+    comparison_df = pd.DataFrame([paired_result])
+
     summary_df.to_csv(SUMMARY_PATH, index=False)
     details_df.to_csv(DETAILS_PATH, index=False)
+    comparison_df.to_csv(COMPARISON_PATH, index=False)
 
     print("\nBENCHMARK SUMMARY")
     print("=" * 65)
     print(summary_df.to_string(index=False))
+    print("\nPAIRED STATISTICAL COMPARISON")
+    print("=" * 65)
+    print(comparison_df.to_string(index=False))
+
+    print(f"\nPaired comparison saved to: {COMPARISON_PATH}")
 
     print(f"\nSummary saved to: {SUMMARY_PATH}")
     print(f"Episode details saved to: {DETAILS_PATH}")
