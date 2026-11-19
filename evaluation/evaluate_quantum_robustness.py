@@ -23,8 +23,13 @@ from config.experiment_config import (
 RESULTS_DIR = PROJECT_ROOT / "results"
 
 ROBUSTNESS_EPISODES = 30
+BOOTSTRAP_SAMPLES = 5000
+BOOTSTRAP_SEED = EVALUATION_SEED
 
-# Each scenario specifies initial SOC and noise levels.
+PAIRED_COMPARISON_PATH = (
+    RESULTS_DIR / "quantum_robustness_paired_comparison.csv"
+)
+
 SCENARIOS = {
     "normal": {
         "initial_soc": 0.5,
@@ -73,11 +78,14 @@ def load_agents():
     quantum_agent = QuantumPolicy()
     quantum_agent.set_weights(np.load(weights_path))
 
-    q_table_path = PROJECT_ROOT / "models" / "q_learning_table.npy"
+    q_table_path = (
+        PROJECT_ROOT / "models" / "q_learning_table.npy"
+    )
 
     if not q_table_path.exists():
         raise FileNotFoundError(
-            "Q-learning table not found. Train the Q-learning agent first."
+            "Q-learning table not found. "
+            "Train the Q-learning agent first."
         )
 
     q_learning_agent = QLearningAgent()
@@ -103,6 +111,7 @@ def run_episode(env, agent, agent_type, seed):
     info = {}
 
     while not (terminated or truncated):
+
         if agent_type in ("quantum", "rule"):
             action = agent.select_action(observation)
 
@@ -113,7 +122,9 @@ def run_episode(env, agent, agent_type, seed):
             )
 
         else:
-            raise ValueError(f"Unknown agent type: {agent_type}")
+            raise ValueError(
+                f"Unknown agent type: {agent_type}"
+            )
 
         observation, reward, terminated, truncated, info = (
             env.step(action)
@@ -134,6 +145,173 @@ def run_episode(env, agent, agent_type, seed):
     }
 
 
+def paired_bootstrap_comparison(
+    quantum_rewards,
+    comparison_rewards,
+    n_bootstrap=BOOTSTRAP_SAMPLES,
+    seed=BOOTSTRAP_SEED,
+):
+    """Compare paired episode rewards against the quantum policy.
+
+    Positive differences favour the comparison agent.
+    """
+
+    quantum_rewards = np.asarray(
+        quantum_rewards,
+        dtype=float,
+    )
+
+    comparison_rewards = np.asarray(
+        comparison_rewards,
+        dtype=float,
+    )
+
+    if quantum_rewards.shape != comparison_rewards.shape:
+        raise ValueError(
+            "Quantum and comparison rewards must have "
+            "the same shape."
+        )
+
+    if quantum_rewards.ndim != 1 or len(quantum_rewards) == 0:
+        raise ValueError(
+            "Reward arrays must be non-empty one-dimensional arrays."
+        )
+
+    if not (
+        np.isfinite(quantum_rewards).all()
+        and np.isfinite(comparison_rewards).all()
+    ):
+        raise ValueError(
+            "Reward arrays must contain finite values."
+        )
+
+    if n_bootstrap < 1:
+        raise ValueError(
+            "n_bootstrap must be at least 1."
+        )
+
+    differences = comparison_rewards - quantum_rewards
+
+    rng = np.random.default_rng(seed)
+
+    bootstrap_means = np.empty(n_bootstrap)
+
+    for index in range(n_bootstrap):
+        sampled = rng.choice(
+            differences,
+            size=len(differences),
+            replace=True,
+        )
+
+        bootstrap_means[index] = np.mean(sampled)
+
+    ci_lower, ci_upper = np.percentile(
+        bootstrap_means,
+        [2.5, 97.5],
+    )
+
+    wins = int(np.sum(differences > 1e-9))
+    losses = int(np.sum(differences < -1e-9))
+    ties = int(np.sum(np.isclose(
+        differences,
+        0.0,
+        atol=1e-9,
+    )))
+
+    return {
+        "scenarios_compared": len(differences),
+        "comparison_agent_wins": wins,
+        "quantum_wins": losses,
+        "ties": ties,
+        "comparison_agent_win_rate": wins / len(differences),
+        "mean_reward_difference_vs_quantum": float(
+            np.mean(differences)
+        ),
+        "median_reward_difference_vs_quantum": float(
+            np.median(differences)
+        ),
+        "reward_difference_ci_95_lower": float(ci_lower),
+        "reward_difference_ci_95_upper": float(ci_upper),
+    }
+
+
+def build_paired_comparisons(details):
+    """Build paired comparisons for every scenario and baseline agent."""
+
+    records = []
+
+    for scenario in SCENARIOS:
+        scenario_data = details[
+            details["scenario"] == scenario
+        ]
+
+        quantum_data = (
+            scenario_data[
+                scenario_data["agent"] == "Quantum Policy"
+            ]
+            .set_index("seed")
+            .sort_index()
+        )
+
+        if quantum_data.empty:
+            raise ValueError(
+                f"No quantum results found for scenario: {scenario}"
+            )
+
+        for agent_name in (
+            "Rule-Based",
+            "Tabular Q-Learning",
+        ):
+            comparison_data = (
+                scenario_data[
+                    scenario_data["agent"] == agent_name
+                ]
+                .set_index("seed")
+                .sort_index()
+            )
+
+            if comparison_data.empty:
+                raise ValueError(
+                    f"No results found for {agent_name} "
+                    f"in scenario {scenario}"
+                )
+
+            common_seeds = quantum_data.index.intersection(
+                comparison_data.index
+            )
+
+            if len(common_seeds) == 0:
+                raise ValueError(
+                    f"No common evaluation seeds for "
+                    f"{agent_name} and Quantum Policy "
+                    f"in scenario {scenario}"
+                )
+
+            quantum_rewards = quantum_data.loc[
+                common_seeds,
+                "total_reward",
+            ].to_numpy()
+
+            comparison_rewards = comparison_data.loc[
+                common_seeds,
+                "total_reward",
+            ].to_numpy()
+
+            stats = paired_bootstrap_comparison(
+                quantum_rewards,
+                comparison_rewards,
+                seed=BOOTSTRAP_SEED,
+            )
+
+            records.append({
+                "scenario": scenario,
+                "comparison_agent": agent_name,
+                **stats,
+            })
+
+    return pd.DataFrame(records)
+
+
 def evaluate_robustness():
     agents = load_agents()
     records = []
@@ -145,9 +323,6 @@ def evaluate_robustness():
 
         env = BatteryEnv(**settings)
 
-        # Separate seed range for each scenario.
-        # The unseen scenario uses seeds not used by the original
-        # evaluation set (1000-1029).
         scenario_seed_start = (
             EVALUATION_SEED
             + 10_000
@@ -194,7 +369,6 @@ def evaluate_robustness():
 
     details = pd.DataFrame(records)
 
-    # Calculate metrics for each agent under each condition.
     summary = (
         details.groupby(["scenario", "agent"])
         .agg(
@@ -210,11 +384,12 @@ def evaluate_robustness():
         .reset_index()
     )
 
-    # Compare each agent against its own normal-condition reward.
     normal_rewards = (
         summary[summary["scenario"] == "normal"]
         [["agent", "mean_reward"]]
-        .rename(columns={"mean_reward": "normal_mean_reward"})
+        .rename(columns={
+            "mean_reward": "normal_mean_reward"
+        })
     )
 
     summary = summary.merge(
@@ -225,7 +400,8 @@ def evaluate_robustness():
     )
 
     summary["reward_change"] = (
-        summary["mean_reward"] - summary["normal_mean_reward"]
+        summary["mean_reward"]
+        - summary["normal_mean_reward"]
     )
 
     summary["reward_change_percent"] = np.where(
@@ -236,6 +412,8 @@ def evaluate_robustness():
         ) * 100,
         np.nan,
     )
+
+    paired_comparison = build_paired_comparisons(details)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -250,14 +428,23 @@ def evaluate_robustness():
     details.to_csv(details_path, index=False)
     summary.to_csv(summary_path, index=False)
 
+    paired_comparison.to_csv(
+        PAIRED_COMPARISON_PATH,
+        index=False,
+    )
+
     print("\n=== Robustness Summary ===")
     print(summary.to_string(index=False))
+
+    print("\n=== Paired Statistical Comparisons ===")
+    print(paired_comparison.to_string(index=False))
 
     print("\nSaved:")
     print(details_path)
     print(summary_path)
+    print(PAIRED_COMPARISON_PATH)
 
-    return details, summary
+    return details, summary, paired_comparison
 
 
 if __name__ == "__main__":
